@@ -2,6 +2,7 @@ import { useEffect, useState, memo } from 'react';
 import { View, Image, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { FilterPreset, FILTER_PRESETS } from '../utils/filters';
+import { buildFilterStyle } from './FilteredImage';
 import { colors, spacing, borderRadius } from '../constants/theme';
 
 const FILTER_THUMB_SIZE = 64;
@@ -19,15 +20,16 @@ function FilterBarComponent({ videoUri, currentTimestamp, selectedFilterId, onSe
   useEffect(() => {
     let cancelled = false;
     VideoThumbnails.getThumbnailAsync(videoUri, {
-      time: currentTimestamp,
+      time: Math.round(currentTimestamp),
       quality: 0.4,
-      headers: {},
     }).then(result => {
       if (!cancelled) setThumbUri(result.uri);
-    }).catch(() => {});
+    }).catch((err) => {
+      console.warn('FilterBar thumbnail failed:', err);
+    });
 
     return () => { cancelled = true; };
-  }, [videoUri, Math.floor(currentTimestamp / 500) * 500]); // Debounce to 500ms intervals
+  }, [videoUri, Math.floor(currentTimestamp / 500) * 500]);
 
   return (
     <ScrollView
@@ -38,6 +40,8 @@ function FilterBarComponent({ videoUri, currentTimestamp, selectedFilterId, onSe
     >
       {FILTER_PRESETS.map((filter) => {
         const isSelected = filter.id === selectedFilterId;
+        const filterViewStyle = buildFilterStyle(filter.adjustments);
+
         return (
           <Pressable
             key={filter.id}
@@ -46,15 +50,12 @@ function FilterBarComponent({ videoUri, currentTimestamp, selectedFilterId, onSe
           >
             <View style={[styles.thumbContainer, isSelected && styles.thumbSelected]}>
               {thumbUri ? (
-                <Image
-                  source={{ uri: thumbUri }}
-                  style={[
-                    styles.thumb,
-                    filter.id === 'mono' || filter.id === 'noir'
-                      ? { opacity: 0.8 }
-                      : undefined,
-                  ]}
-                />
+                <View style={[styles.thumb, filterViewStyle as any]}>
+                  <Image
+                    source={{ uri: thumbUri }}
+                    style={styles.thumbImage}
+                  />
+                </View>
               ) : (
                 <View style={styles.thumbPlaceholder} />
               )}
@@ -95,6 +96,10 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
   thumb: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbImage: {
     width: '100%',
     height: '100%',
   },

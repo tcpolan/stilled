@@ -17,8 +17,10 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Still needs access to your photo library to browse and save photos.",
-        "NSPhotoLibraryAddUsageDescription": "Still needs permission to save extracted frames to your photo library."
-      }
+        "NSPhotoLibraryAddUsageDescription": "Still needs permission to save extracted frames to your photo library.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.tcpolan.still"
     },
     "plugins": [
       "expo-router",
@@ -29,7 +31,19 @@
           "savePhotosPermission": "Still needs permission to save extracted frames to your photo library.",
           "isAccessMediaLocationEnabled": true
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Still needs access to your photo library to select videos."
+        }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e0fef902-2101-4d55-9049-fc5fa621048b"
+      }
+    }
   }
 }

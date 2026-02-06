@@ -1,0 +1,39 @@
+diff --git a/node_modules/expo-image-picker/ios/MediaHandler.swift b/node_modules/expo-image-picker/ios/MediaHandler.swift
+index 6e4fbe1..51ac9b4 100644
+--- a/node_modules/expo-image-picker/ios/MediaHandler.swift
++++ b/node_modules/expo-image-picker/ios/MediaHandler.swift
+@@ -236,13 +236,16 @@ internal struct MediaHandler {
+     let (photoUrl, pairedVideoUrl) = try generatePairedUrls(
+       photoFileExtension: photoFileExtension, videoFileExtension: pairedVideoFileExtension)
+ 
++    let networkOptions = PHAssetResourceRequestOptions()
++    networkOptions.isNetworkAccessAllowed = true
++
+     let imageData = try await PHAssetResourceManager.default().requestData(
+-      for: photoResource, options: nil)
++      for: photoResource, options: networkOptions)
+ 
+     try await PHAssetResourceManager.default().writeData(
+-      for: photoResource, toFile: photoUrl, options: nil)
++      for: photoResource, toFile: photoUrl, options: networkOptions)
+     try await PHAssetResourceManager.default().writeData(
+-      for: videoResource, toFile: pairedVideoUrl, options: nil)
++      for: videoResource, toFile: pairedVideoUrl, options: networkOptions)
+ 
+     let fileSize = getFileSize(from: photoUrl)
+     let mimeType = getMimeType(from: photoUrl.pathExtension)
+@@ -310,10 +313,13 @@ internal struct MediaHandler {
+         let fileExtension = getFileExtension(from: originalFilename)
+         let destinationUrl = try generateUrl(withFileExtension: fileExtension)
+ 
++        let resourceOptions = PHAssetResourceRequestOptions()
++        resourceOptions.isNetworkAccessAllowed = true
++
+         try await PHAssetResourceManager.default().writeData(
+           for: resource,
+           toFile: destinationUrl,
+-          options: nil
++          options: resourceOptions
+         )
+ 
+         let mimeType = getMimeType(from: destinationUrl.pathExtension)

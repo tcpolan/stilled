@@ -21,6 +21,7 @@ interface FilmStripProps {
   currentTimestamp: number;
   durationMs: number;
   onTimestampChange: (timestamp: number) => void;
+  interactive?: boolean;
 }
 
 export function FilmStrip({
@@ -30,6 +31,7 @@ export function FilmStrip({
   currentTimestamp,
   durationMs,
   onTimestampChange,
+  interactive = true,
 }: FilmStripProps) {
   const stripWidth = useSharedValue(0);
   const indicatorX = useSharedValue(0);
@@ -106,29 +108,31 @@ export function FilmStrip({
           <ActivityIndicator color={colors.accent} />
         </View>
       ) : (
-        <GestureDetector gesture={composed}>
-          <Animated.View style={styles.strip} onLayout={onLayout}>
-            <View style={styles.framesRow}>
-              {frames.map((frame, index) => (
-                <Image
-                  key={index}
-                  source={{ uri: frame.uri }}
-                  style={[
-                    styles.frame,
-                    {
-                      width: `${100 / frames.length}%`,
-                      height: THUMBNAIL_HEIGHT,
-                    },
-                  ]}
-                />
-              ))}
-            </View>
-            <Animated.View style={[styles.indicator, indicatorStyle]} />
-            {loading && (
-              <View style={[styles.progressOverlay, { width: `${(1 - progress) * 100}%` }]} />
-            )}
-          </Animated.View>
-        </GestureDetector>
+        <View pointerEvents={interactive ? 'auto' : 'none'}>
+          <GestureDetector gesture={composed}>
+            <Animated.View style={styles.strip} onLayout={onLayout}>
+              <View style={styles.framesRow}>
+                {frames.map((frame, index) => (
+                  <Image
+                    key={index}
+                    source={{ uri: frame.uri }}
+                    style={[
+                      styles.frame,
+                      {
+                        width: `${100 / frames.length}%`,
+                        height: THUMBNAIL_HEIGHT,
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+              <Animated.View style={[styles.indicator, indicatorStyle]} />
+              {loading && (
+                <View style={[styles.progressOverlay, { width: `${(1 - progress) * 100}%` }]} />
+              )}
+            </Animated.View>
+          </GestureDetector>
+        </View>
       )}
     </View>
   );

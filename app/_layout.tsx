@@ -14,7 +14,10 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: colors.background },
           animation: 'slide_from_right',
         }}
-      />
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="editor" options={{ gestureEnabled: false }} />
+      </Stack>
     </GestureHandlerRootView>
   );
 }

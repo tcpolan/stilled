@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 
-const THUMBNAIL_COUNT = 120;
+const THUMBNAIL_COUNT = 40;
 const THUMBNAIL_HEIGHT = 60;
 
 interface FrameData {
@@ -32,7 +32,27 @@ export function useFrameExtractor(videoUri: string, durationSeconds: number): Us
     const interval = durationMs / count;
 
     async function extract() {
+      if (!videoUri) {
+        setLoading(false);
+        return;
+      }
+      console.log('Frame extraction starting:', { videoUri, durationSeconds, count });
       const results: FrameData[] = [];
+
+      // Extract a single preview frame immediately so the user sees something fast
+      try {
+        const preview = await VideoThumbnails.getThumbnailAsync(videoUri, {
+          time: 0,
+          quality: 0.3,
+        });
+        if (!abortRef.current) {
+          results.push({ uri: preview.uri, timestamp: 0 });
+          setFrames([...results]);
+        }
+      } catch (err) {
+        console.warn('Preview frame extraction failed:', err);
+      }
+
       const batchSize = 5;
 
       for (let i = 0; i < count; i += batchSize) {
@@ -43,13 +63,15 @@ export function useFrameExtractor(videoUri: string, durationSeconds: number): Us
           (_, j) => {
             const timestamp = (i + j) * interval;
             return VideoThumbnails.getThumbnailAsync(videoUri, {
-              time: timestamp,
+              time: Math.round(timestamp),
               quality: 0.3,
-              headers: {},
             }).then(result => ({
               uri: result.uri,
               timestamp,
-            })).catch(() => null);
+            })).catch((err) => {
+              console.warn('Thumbnail extraction failed at', timestamp, err);
+              return null;
+            });
           }
         );
 

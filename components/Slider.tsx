@@ -1,16 +1,16 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { View, StyleSheet, LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   runOnJS,
-  withSpring,
 } from 'react-native-reanimated';
 import { colors } from '../constants/theme';
 
 const TRACK_HEIGHT = 4;
-const THUMB_SIZE = 20;
+const THUMB_SIZE = 24;
+const HIT_SLOP = 12;
 
 interface SliderProps {
   value: number;
@@ -24,40 +24,46 @@ export default function Slider({ value, minimumValue, maximumValue, onValueChang
   const thumbX = useSharedValue(0);
 
   const range = maximumValue - minimumValue;
-  const normalizedValue = (value - minimumValue) / range;
+
+  // Sync thumb position when value changes externally
+  useEffect(() => {
+    if (trackWidth.value > 0) {
+      const normalized = (value - minimumValue) / range;
+      thumbX.value = normalized * trackWidth.value;
+    }
+  }, [value, minimumValue, range, trackWidth, thumbX]);
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
-    trackWidth.value = e.nativeEvent.layout.width;
-    thumbX.value = normalizedValue * e.nativeEvent.layout.width;
-  }, [normalizedValue, trackWidth, thumbX]);
+    const width = e.nativeEvent.layout.width;
+    trackWidth.value = width;
+    const normalized = (value - minimumValue) / range;
+    thumbX.value = normalized * width;
+  }, [value, minimumValue, range, trackWidth, thumbX]);
 
   const emitValue = useCallback((x: number, width: number) => {
+    if (width <= 0) return;
     const ratio = Math.max(0, Math.min(1, x / width));
     const val = minimumValue + ratio * range;
     onValueChange(Math.round(val * 100) / 100);
   }, [minimumValue, range, onValueChange]);
 
-  const panGesture = Gesture.Pan()
-    .onBegin((e) => {
+  const gesture = Gesture.Pan()
+    .hitSlop({ top: HIT_SLOP, bottom: HIT_SLOP, left: 0, right: 0 })
+    .onStart((e) => {
+      'worklet';
       const x = Math.max(0, Math.min(e.x, trackWidth.value));
       thumbX.value = x;
       runOnJS(emitValue)(x, trackWidth.value);
     })
     .onUpdate((e) => {
+      'worklet';
       const x = Math.max(0, Math.min(e.x, trackWidth.value));
       thumbX.value = x;
       runOnJS(emitValue)(x, trackWidth.value);
     })
-    .minDistance(0);
-
-  const tapGesture = Gesture.Tap()
-    .onEnd((e) => {
-      const x = Math.max(0, Math.min(e.x, trackWidth.value));
-      thumbX.value = withSpring(x, { damping: 20, stiffness: 300 });
-      runOnJS(emitValue)(x, trackWidth.value);
-    });
-
-  const composed = Gesture.Race(panGesture, tapGesture);
+    .minDistance(0)
+    .activeOffsetX([-5, 5])
+    .failOffsetY([-20, 20]);
 
   const thumbStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: thumbX.value - THUMB_SIZE / 2 }],
@@ -67,11 +73,11 @@ export default function Slider({ value, minimumValue, maximumValue, onValueChang
     width: thumbX.value,
   }));
 
-  // Center marker for -1 to 1 sliders
+  // Center marker position for bipolar sliders
   const centerX = minimumValue < 0 ? ((0 - minimumValue) / range) * 100 : -1;
 
   return (
-    <GestureDetector gesture={composed}>
+    <GestureDetector gesture={gesture}>
       <View style={styles.container} onLayout={onLayout}>
         <View style={styles.track}>
           {centerX >= 0 && (
@@ -87,7 +93,7 @@ export default function Slider({ value, minimumValue, maximumValue, onValueChang
 
 const styles = StyleSheet.create({
   container: {
-    height: THUMB_SIZE + 8,
+    height: THUMB_SIZE + HIT_SLOP * 2,
     justifyContent: 'center',
   },
   track: {
@@ -111,6 +117,7 @@ const styles = StyleSheet.create({
   },
   thumb: {
     position: 'absolute',
+    top: HIT_SLOP,
     width: THUMB_SIZE,
     height: THUMB_SIZE,
     borderRadius: THUMB_SIZE / 2,

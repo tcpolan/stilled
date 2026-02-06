@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import Slider from './Slider';
 import { AdjustmentValues } from '../utils/filters';
 import { colors, spacing } from '../constants/theme';
@@ -8,35 +8,47 @@ interface AdjustmentPanelProps {
   onAdjustmentChange: (key: keyof AdjustmentValues, value: number) => void;
 }
 
+const SLIDERS: { key: keyof AdjustmentValues; label: string; min: number; max: number }[] = [
+  { key: 'brightness', label: 'Brightness', min: -1, max: 1 },
+  { key: 'contrast', label: 'Contrast', min: -1, max: 1 },
+  { key: 'saturation', label: 'Saturation', min: -1, max: 1 },
+  { key: 'exposure', label: 'Exposure', min: -1, max: 1 },
+  { key: 'highlights', label: 'Highlights', min: -1, max: 1 },
+  { key: 'shadows', label: 'Shadows', min: -1, max: 1 },
+  { key: 'warmth', label: 'Warmth', min: -1, max: 1 },
+  { key: 'vignette', label: 'Vignette', min: 0, max: 1 },
+];
+
 export function AdjustmentPanel({ adjustments, onAdjustmentChange }: AdjustmentPanelProps) {
   return (
-    <View style={styles.container}>
-      <AdjustmentRow
-        label="Brightness"
-        value={adjustments.brightness}
-        onChange={(v) => onAdjustmentChange('brightness', v)}
-      />
-      <AdjustmentRow
-        label="Contrast"
-        value={adjustments.contrast}
-        onChange={(v) => onAdjustmentChange('contrast', v)}
-      />
-      <AdjustmentRow
-        label="Saturation"
-        value={adjustments.saturation}
-        onChange={(v) => onAdjustmentChange('saturation', v)}
-      />
-    </View>
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      {SLIDERS.map(({ key, label, min, max }) => (
+        <AdjustmentRow
+          key={key}
+          label={label}
+          value={adjustments[key] ?? 0}
+          min={min}
+          max={max}
+          onChange={(v) => onAdjustmentChange(key, v)}
+        />
+      ))}
+    </ScrollView>
   );
 }
 
 interface AdjustmentRowProps {
   label: string;
   value: number;
+  min: number;
+  max: number;
   onChange: (value: number) => void;
 }
 
-function AdjustmentRow({ label, value, onChange }: AdjustmentRowProps) {
+function AdjustmentRow({ label, value, min, max, onChange }: AdjustmentRowProps) {
   const displayValue = Math.round(value * 100);
 
   return (
@@ -45,8 +57,8 @@ function AdjustmentRow({ label, value, onChange }: AdjustmentRowProps) {
       <View style={styles.sliderContainer}>
         <Slider
           value={value}
-          minimumValue={-1}
-          maximumValue={1}
+          minimumValue={min}
+          maximumValue={max}
           onValueChange={onChange}
         />
       </View>
@@ -56,9 +68,13 @@ function AdjustmentRow({ label, value, onChange }: AdjustmentRowProps) {
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    maxHeight: 200,
+  },
   container: {
     paddingHorizontal: spacing.md,
     gap: spacing.sm,
+    paddingBottom: spacing.sm,
   },
   row: {
     flexDirection: 'row',
