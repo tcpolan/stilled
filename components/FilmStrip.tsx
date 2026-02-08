@@ -1,18 +1,24 @@
-import { useCallback, useMemo } from 'react';
-import { View, Image, StyleSheet, ActivityIndicator, LayoutChangeEvent } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import React, { useCallback, useState, useRef } from 'react';
+import { View, Image, Text, StyleSheet, ActivityIndicator, LayoutChangeEvent } from 'react-native';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
+  useAnimatedScrollHandler,
   runOnJS,
-  withSpring,
 } from 'react-native-reanimated';
-import * as Haptics from 'expo-haptics';
+import { lightImpact } from '../utils/haptics';
 import { FrameData, THUMBNAIL_HEIGHT } from '../hooks/useFrameExtractor';
-import { colors, borderRadius } from '../constants/theme';
+import { colors, spacing } from '../constants/theme';
 
-const INDICATOR_WIDTH = 3;
-const FRAME_WIDTH = 2;
+function formatTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+const FRAME_WIDTH = 44;
+const FRAME_HEIGHT = THUMBNAIL_HEIGHT; // 60
+const PLAYHEAD_WIDTH = 3;
+const VISIBLE_BUFFER = 15; // render +-15 frames around center
 
 interface FilmStripProps {
   frames: FrameData[];
@@ -24,7 +30,7 @@ interface FilmStripProps {
   interactive?: boolean;
 }
 
-export function FilmStrip({
+export const FilmStrip = React.memo(function FilmStrip({
   frames,
   loading,
   progress,
@@ -33,142 +39,172 @@ export function FilmStrip({
   onTimestampChange,
   interactive = true,
 }: FilmStripProps) {
-  const stripWidth = useSharedValue(0);
-  const indicatorX = useSharedValue(0);
-  const lastFrameIndex = useSharedValue(-1);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [visibleCenter, setVisibleCenter] = useState(0);
+  const lastFrameIndexRef = useRef(-1);
+  const lastVisibleCenterRef = useRef(0);
+  const scrollViewRef = useRef<Animated.ScrollView>(null);
+
+  const frameCount = frames.length;
+  const totalContentWidth = frameCount * FRAME_WIDTH;
+  const halfContainer = containerWidth / 2;
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
-    stripWidth.value = e.nativeEvent.layout.width;
-  }, [stripWidth]);
-
-  const frameWidth = useMemo(() => {
-    if (frames.length === 0) return FRAME_WIDTH;
-    // We'll calculate this on layout
-    return FRAME_WIDTH;
-  }, [frames.length]);
-
-  const triggerHaptic = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setContainerWidth(e.nativeEvent.layout.width);
   }, []);
 
-  const updateTimestamp = useCallback((ts: number) => {
+  const triggerHaptic = useCallback(() => {
+    lightImpact();
+  }, []);
+
+  // Called from scroll handler on JS thread — update timestamp + throttled visible range
+  const onScrollJS = useCallback((offset: number) => {
+    if (totalContentWidth <= 0 || durationMs <= 0) return;
+    const ratio = Math.max(0, Math.min(offset / totalContentWidth, 1));
+    const ts = ratio * durationMs;
+
+    // Haptic on frame boundary crossing
+    const frameIndex = Math.min(Math.floor(ratio * frameCount), frameCount - 1);
+    if (frameIndex !== lastFrameIndexRef.current) {
+      lastFrameIndexRef.current = frameIndex;
+      triggerHaptic();
+    }
+
     onTimestampChange(ts);
-  }, [onTimestampChange]);
 
-  const panGesture = Gesture.Pan()
-    .onBegin((e) => {
-      const x = Math.max(0, Math.min(e.x, stripWidth.value));
-      indicatorX.value = x;
-      const ratio = x / stripWidth.value;
-      const ts = ratio * durationMs;
-      const frameIndex = Math.floor(ratio * frames.length);
-      if (frameIndex !== lastFrameIndex.value) {
-        lastFrameIndex.value = frameIndex;
-        runOnJS(triggerHaptic)();
-      }
-      runOnJS(updateTimestamp)(ts);
-    })
-    .onUpdate((e) => {
-      const x = Math.max(0, Math.min(e.x, stripWidth.value));
-      indicatorX.value = x;
-      const ratio = x / stripWidth.value;
-      const ts = ratio * durationMs;
-      const frameIndex = Math.floor(ratio * frames.length);
-      if (frameIndex !== lastFrameIndex.value) {
-        lastFrameIndex.value = frameIndex;
-        runOnJS(triggerHaptic)();
-      }
-      runOnJS(updateTimestamp)(ts);
-    })
-    .minDistance(0);
+    // Throttle visible range updates: only update state when center shifts by 5+ frames
+    const newCenter = Math.floor(offset / FRAME_WIDTH);
+    if (Math.abs(newCenter - lastVisibleCenterRef.current) >= 5) {
+      lastVisibleCenterRef.current = newCenter;
+      setVisibleCenter(newCenter);
+    }
+  }, [totalContentWidth, durationMs, frameCount, triggerHaptic, onTimestampChange]);
 
-  const tapGesture = Gesture.Tap()
-    .onEnd((e) => {
-      const x = Math.max(0, Math.min(e.x, stripWidth.value));
-      indicatorX.value = withSpring(x, { damping: 20, stiffness: 300 });
-      const ratio = x / stripWidth.value;
-      const ts = ratio * durationMs;
-      runOnJS(triggerHaptic)();
-      runOnJS(updateTimestamp)(ts);
-    });
+  const scrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      runOnJS(onScrollJS)(event.contentOffset.x);
+    },
+  });
 
-  const composed = Gesture.Race(panGesture, tapGesture);
+  // Compute visible window from internal scroll-based center
+  const visibleStart = Math.max(0, visibleCenter - VISIBLE_BUFFER);
+  const visibleEnd = Math.min(frameCount - 1, visibleCenter + VISIBLE_BUFFER);
 
-  const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: indicatorX.value - INDICATOR_WIDTH / 2 }],
-  }));
-
-  // Sync indicator position from external timestamp changes
-  const currentRatio = durationMs > 0 ? currentTimestamp / durationMs : 0;
+  // Only create elements for the visible window
+  const visibleFrames: React.ReactNode[] = [];
+  for (let i = visibleStart; i <= visibleEnd && i < frameCount; i++) {
+    const frame = frames[i];
+    if (frame) {
+      visibleFrames.push(
+        <Image
+          key={i}
+          source={{ uri: frame.uri }}
+          style={[styles.frame, { left: i * FRAME_WIDTH }]}
+        />
+      );
+    } else {
+      visibleFrames.push(
+        <View
+          key={i}
+          style={[styles.framePlaceholder, { left: i * FRAME_WIDTH }]}
+        />
+      );
+    }
+  }
 
   return (
-    <View style={styles.container}>
-      {loading && frames.length === 0 ? (
+    <View style={styles.container} onLayout={onLayout}>
+      <Text style={styles.timestamp}>
+        {formatTime(currentTimestamp)} / {formatTime(durationMs)}
+      </Text>
+      {loading && frameCount === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color={colors.accent} />
         </View>
       ) : (
-        <View pointerEvents={interactive ? 'auto' : 'none'}>
-          <GestureDetector gesture={composed}>
-            <Animated.View style={styles.strip} onLayout={onLayout}>
-              <View style={styles.framesRow}>
-                {frames.map((frame, index) => (
-                  <Image
-                    key={index}
-                    source={{ uri: frame.uri }}
-                    style={[
-                      styles.frame,
-                      {
-                        width: `${100 / frames.length}%`,
-                        height: THUMBNAIL_HEIGHT,
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-              <Animated.View style={[styles.indicator, indicatorStyle]} />
-              {loading && (
-                <View style={[styles.progressOverlay, { width: `${(1 - progress) * 100}%` }]} />
-              )}
-            </Animated.View>
-          </GestureDetector>
+        <View style={styles.stripWrapper}>
+          <Animated.ScrollView
+            ref={scrollViewRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            decelerationRate="fast"
+            scrollEnabled={interactive}
+            contentContainerStyle={{
+              paddingHorizontal: halfContainer,
+            }}
+            onScroll={scrollHandler}
+            scrollEventThrottle={16}
+          >
+            <View style={[styles.framesRow, { width: totalContentWidth }]}>
+              {visibleFrames}
+            </View>
+          </Animated.ScrollView>
+
+          {/* Loading progress overlay */}
+          {loading && (
+            <View
+              style={[
+                styles.progressOverlay,
+                { width: `${(1 - progress) * 100}%` },
+              ]}
+              pointerEvents="none"
+            />
+          )}
+
+          {/* Centered playhead overlay */}
+          <View style={[styles.playhead, { left: halfContainer - PLAYHEAD_WIDTH / 2 }]} pointerEvents="none" />
         </View>
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
-    height: THUMBNAIL_HEIGHT + 16,
     justifyContent: 'center',
   },
+  timestamp: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
   loadingContainer: {
-    height: THUMBNAIL_HEIGHT,
+    height: FRAME_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.surface,
-    borderRadius: borderRadius.md,
+    borderRadius: 8,
   },
-  strip: {
-    height: THUMBNAIL_HEIGHT,
-    borderRadius: borderRadius.sm,
+  stripWrapper: {
+    height: FRAME_HEIGHT,
     overflow: 'hidden',
+    borderRadius: 8,
     backgroundColor: colors.surface,
   },
   framesRow: {
-    flexDirection: 'row',
-    height: THUMBNAIL_HEIGHT,
+    height: FRAME_HEIGHT,
+    position: 'relative',
   },
   frame: {
-    resizeMode: 'cover',
-  },
-  indicator: {
     position: 'absolute',
     top: 0,
-    left: 0,
-    width: INDICATOR_WIDTH,
-    height: THUMBNAIL_HEIGHT,
+    width: FRAME_WIDTH,
+    height: FRAME_HEIGHT,
+    resizeMode: 'cover',
+  },
+  framePlaceholder: {
+    position: 'absolute',
+    top: 0,
+    width: FRAME_WIDTH,
+    height: FRAME_HEIGHT,
+    backgroundColor: colors.surface,
+  },
+  playhead: {
+    position: 'absolute',
+    top: 0,
+    width: PLAYHEAD_WIDTH,
+    height: FRAME_HEIGHT,
     backgroundColor: colors.accent,
     borderRadius: 1,
     shadowColor: '#000',
@@ -180,7 +216,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     right: 0,
-    height: THUMBNAIL_HEIGHT,
+    height: FRAME_HEIGHT,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
 });

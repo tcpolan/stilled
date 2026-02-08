@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "Still",
-    "slug": "still",
+    "name": "Stilled",
+    "slug": "stilled",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "scheme": "still",
+    "scheme": "stilled",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -16,26 +16,26 @@
     "ios": {
       "supportsTablet": false,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Still needs access to your photo library to browse and save photos.",
-        "NSPhotoLibraryAddUsageDescription": "Still needs permission to save extracted frames to your photo library.",
+        "NSPhotoLibraryUsageDescription": "Stilled needs access to your photo library to browse and save photos.",
+        "NSPhotoLibraryAddUsageDescription": "Stilled needs permission to save extracted frames to your photo library.",
         "ITSAppUsesNonExemptEncryption": false
       },
-      "bundleIdentifier": "com.tcpolan.still"
+      "bundleIdentifier": "com.tcpolan.stilled"
     },
     "plugins": [
       "expo-router",
       [
         "expo-media-library",
         {
-          "photosPermission": "Still needs access to your photo library to browse videos and save extracted frames.",
-          "savePhotosPermission": "Still needs permission to save extracted frames to your photo library.",
+          "photosPermission": "Stilled needs access to your photo library to browse videos and save extracted frames.",
+          "savePhotosPermission": "Stilled needs permission to save extracted frames to your photo library.",
           "isAccessMediaLocationEnabled": true
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Still needs access to your photo library to select videos."
+          "photosPermission": "Stilled needs access to your photo library to select videos."
         }
       ]
     ],

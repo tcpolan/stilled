@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   Pressable,
   ActivityIndicator,
@@ -9,23 +10,26 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Haptics from 'expo-haptics';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+} from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
+import { lightImpact, successNotification, errorNotification } from '../utils/haptics';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
 import * as ImagePicker from 'expo-image-picker';
 import { useFrameExtractor } from '../hooks/useFrameExtractor';
-import { useFilterEngine } from '../hooks/useFilterEngine';
-import { FilteredImage } from '../components/FilteredImage';
 import { FilmStrip } from '../components/FilmStrip';
-import { FilterBar } from '../components/FilterBar';
-import { AdjustmentPanel } from '../components/AdjustmentPanel';
 import { CropOverlay, CropRect } from '../components/CropOverlay';
 import { SaveCelebration } from '../components/SaveCelebration';
 import { Toast } from '../components/Toast';
 import { colors, spacing, borderRadius } from '../constants/theme';
 
-type EditorTab = 'filters' | 'adjust' | 'crop';
+const ICLOUD_DELAY_MS = 1500;
 
 export default function EditorScreen() {
   const { localUri, duration } = useLocalSearchParams<{ localUri: string; duration: string }>();
@@ -36,7 +40,7 @@ export default function EditorScreen() {
   const durationMs = durationSeconds * 1000;
 
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
-  const [activeTab, setActiveTab] = useState<EditorTab>('filters');
+  const [cropMode, setCropMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'error' } | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -44,6 +48,22 @@ export default function EditorScreen() {
   const [flipH, setFlipH] = useState(false);
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
   const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
+  const downloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Pinch-to-zoom shared values
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+
+  useEffect(() => {
+    return () => {
+      if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+    };
+  }, []);
 
   const handlePreviewLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -51,14 +71,6 @@ export default function EditorScreen() {
   }, []);
 
   const { frames, loading: framesLoading, progress } = useFrameExtractor(videoUri, durationSeconds);
-  const {
-    selectedFilter,
-    adjustments,
-    selectFilter,
-    setAdjustment,
-    resetAdjustments,
-    effectiveAdjustments,
-  } = useFilterEngine();
 
   const currentFrame = (() => {
     if (frames.length === 0) return null;
@@ -70,12 +82,24 @@ export default function EditorScreen() {
   const displayedTimestamp = currentFrame?.timestamp ?? currentTimestamp;
 
   const handleBack = useCallback(async () => {
+    setDownloadingVideo(false);
+    downloadTimerRef.current = setTimeout(() => {
+      setDownloadingVideo(true);
+    }, ICLOUD_DELAY_MS);
+
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['videos'],
       });
+      if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+      setDownloadingVideo(false);
+
       if (result.canceled || result.assets.length === 0) {
-        router.back();
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/');
+        }
         return;
       }
       const asset = result.assets[0];
@@ -85,7 +109,13 @@ export default function EditorScreen() {
         params: { localUri: asset.uri, duration: String(dur) },
       });
     } catch {
-      router.back();
+      if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+      setDownloadingVideo(false);
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/');
+      }
     }
   }, [router]);
 
@@ -98,27 +128,122 @@ export default function EditorScreen() {
   }, []);
 
   const handleReset = useCallback(() => {
-    resetAdjustments();
     setCropRect(null);
     setFlipH(false);
     setRotation(0);
-  }, [resetAdjustments]);
+    setCropMode(false);
+    scale.value = withTiming(1);
+    savedScale.value = 1;
+    translateX.value = withTiming(0);
+    translateY.value = withTiming(0);
+    savedTranslateX.value = 0;
+    savedTranslateY.value = 0;
+  }, [scale, savedScale, translateX, translateY, savedTranslateX, savedTranslateY]);
 
   const handleFlip = useCallback(() => {
     setFlipH(prev => !prev);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    lightImpact();
   }, []);
 
   const handleRotate = useCallback(() => {
     setRotation(prev => ((prev + 90) % 360) as 0 | 90 | 180 | 270);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    lightImpact();
   }, []);
+
+  const toggleCropMode = useCallback(() => {
+    setCropMode(prev => {
+      if (!prev) {
+        // Entering crop mode — reset zoom
+        scale.value = withTiming(1);
+        savedScale.value = 1;
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+      return !prev;
+    });
+    lightImpact();
+  }, [scale, savedScale, translateX, translateY, savedTranslateX, savedTranslateY]);
+
+  // --- Pinch-to-zoom gestures (disabled in crop mode) ---
+  const pinchGesture = Gesture.Pinch()
+    .enabled(!cropMode)
+    .onStart(() => {
+      'worklet';
+    })
+    .onUpdate((e) => {
+      'worklet';
+      const next = savedScale.value * e.scale;
+      scale.value = Math.min(Math.max(next, 1), 5);
+    })
+    .onEnd(() => {
+      'worklet';
+      savedScale.value = scale.value;
+      if (scale.value <= 1) {
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  const panGesture = Gesture.Pan()
+    .enabled(!cropMode)
+    .minPointers(2)
+    .onStart(() => {
+      'worklet';
+    })
+    .onUpdate((e) => {
+      'worklet';
+      if (scale.value <= 1) return;
+      translateX.value = savedTranslateX.value + e.translationX;
+      translateY.value = savedTranslateY.value + e.translationY;
+    })
+    .onEnd(() => {
+      'worklet';
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
+
+  const doubleTap = Gesture.Tap()
+    .enabled(!cropMode)
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      'worklet';
+      scale.value = withTiming(1);
+      savedScale.value = 1;
+      translateX.value = withTiming(0);
+      translateY.value = withTiming(0);
+      savedTranslateX.value = 0;
+      savedTranslateY.value = 0;
+    });
+
+  const zoomPan = Gesture.Simultaneous(pinchGesture, panGesture);
+  const composedGesture = Gesture.Race(doubleTap, zoomPan);
+
+  const animatedPreviewStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+
+  // Build flip/rotation transform for the image
+  const imageTransform: ({ rotate: string } | { scaleX: number })[] = [];
+  if (rotation !== 0) {
+    imageTransform.push({ rotate: `${rotation}deg` });
+  }
+  if (flipH) {
+    imageTransform.push({ scaleX: -1 });
+  }
 
   const handleSave = useCallback(async () => {
     if (saving) return;
     setSaving(true);
     try {
-      // 0. Ensure media library permission
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         setToast({ message: 'Photo library access is required to save', type: 'error' });
@@ -126,27 +251,29 @@ export default function EditorScreen() {
         return;
       }
 
-      // 1. Extract full-res frame at the same timestamp shown in preview
       const fullRes = await VideoThumbnails.getThumbnailAsync(videoUri, {
         time: Math.round(displayedTimestamp),
         quality: 1,
       });
 
-      // 2. Build manipulation actions
       const actions: ImageManipulator.Action[] = [];
 
-      // Apply rotation first
       if (rotation !== 0) {
         actions.push({ rotate: rotation });
       }
 
-      // Apply horizontal flip
       if (flipH) {
         actions.push({ flip: ImageManipulator.FlipType.Horizontal });
       }
 
-      // Apply crop — map from container space to image space (accounting for resizeMode="cover")
-      if (cropRect && (cropRect.x > 0 || cropRect.y > 0 || cropRect.width < 1 || cropRect.height < 1)) {
+      // Map zoom + crop to image-space crop
+      const s = scale.value;
+      const tx = translateX.value;
+      const ty = translateY.value;
+      const hasCrop = cropRect && (cropRect.x > 0 || cropRect.y > 0 || cropRect.width < 1 || cropRect.height < 1);
+      const hasZoom = s > 1;
+
+      if (hasCrop || hasZoom) {
         const isRotated90or270 = rotation === 90 || rotation === 270;
         const imgW = isRotated90or270 ? fullRes.height : fullRes.width;
         const imgH = isRotated90or270 ? fullRes.width : fullRes.height;
@@ -155,40 +282,65 @@ export default function EditorScreen() {
         const ch = previewLayout.height;
 
         if (cw > 0 && ch > 0) {
-          // cover: image is scaled so the smaller axis fills the container
-          const scale = Math.max(cw / imgW, ch / imgH);
-          // Visible portion of the image in image-pixel coordinates
-          const visibleW = cw / scale;
-          const visibleH = ch / scale;
-          // Offset: the hidden part on each side
-          const offsetX = (imgW - visibleW) / 2;
-          const offsetY = (imgH - visibleH) / 2;
+          const coverScale = Math.max(cw / imgW, ch / imgH);
+          const visibleW = cw / coverScale;
+          const visibleH = ch / coverScale;
+
+          // Start with the cover-fit visible area
+          let cropX = (imgW - visibleW) / 2;
+          let cropY = (imgH - visibleH) / 2;
+          let cropW = visibleW;
+          let cropH = visibleH;
+
+          // Apply zoom: viewport shrinks by 1/s, shifts by translate
+          if (hasZoom) {
+            const zoomW = visibleW / s;
+            const zoomH = visibleH / s;
+            cropX = cropX + (visibleW - zoomW) / 2 - tx / (s * coverScale);
+            cropY = cropY + (visibleH - zoomH) / 2 - ty / (s * coverScale);
+            cropW = zoomW;
+            cropH = zoomH;
+          }
+
+          // Apply manual crop rect within the (possibly zoomed) area
+          if (hasCrop && cropRect) {
+            const subX = cropRect.x * cropW;
+            const subY = cropRect.y * cropH;
+            cropW = cropRect.width * cropW;
+            cropH = cropRect.height * cropH;
+            cropX = cropX + subX;
+            cropY = cropY + subY;
+          }
+
+          // Clamp to image bounds
+          cropX = Math.max(0, cropX);
+          cropY = Math.max(0, cropY);
+          cropW = Math.min(cropW, imgW - cropX);
+          cropH = Math.min(cropH, imgH - cropY);
 
           actions.push({
             crop: {
-              originX: Math.round(offsetX + cropRect.x * visibleW),
-              originY: Math.round(offsetY + cropRect.y * visibleH),
-              width: Math.round(cropRect.width * visibleW),
-              height: Math.round(cropRect.height * visibleH),
+              originX: Math.round(cropX),
+              originY: Math.round(cropY),
+              width: Math.round(cropW),
+              height: Math.round(cropH),
             },
           });
         }
       }
 
-      // 3. Apply via image manipulator
       const result = await ImageManipulator.manipulateAsync(
         fullRes.uri,
         actions,
         { compress: 1, format: ImageManipulator.SaveFormat.PNG }
       );
 
-      // 4. Save to camera roll
       await MediaLibrary.createAssetAsync(result.uri);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      successNotification();
       setShowCelebration(true);
     } catch (error) {
       console.error('Save failed:', error);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      errorNotification();
       setToast({ message: 'Failed to save', type: 'error' });
     } finally {
       setSaving(false);
@@ -221,22 +373,32 @@ export default function EditorScreen() {
         </Pressable>
       </View>
 
-      {/* Frame preview with filter applied */}
-      <View style={styles.previewContainer}>
-        {currentPreviewUri ? (
-          <View style={styles.previewWrapper} onLayout={handlePreviewLayout}>
-            <FilteredImage
-              uri={currentPreviewUri}
-              adjustments={effectiveAdjustments}
-              style={styles.previewImage}
-              resizeMode="cover"
-              flipH={flipH}
-              rotation={rotation}
-            />
-            {activeTab === 'crop' && (
-              <CropOverlay onCropChange={handleCropChange} />
-            )}
+      {/* Frame preview with zoom + flip/rotation */}
+      <View style={[styles.previewContainer, cropMode && styles.previewContainerCrop]}>
+        {downloadingVideo ? (
+          <View style={styles.previewPlaceholder}>
+            <ActivityIndicator color={colors.accent} size="large" />
+            <Text style={styles.downloadingText}>Downloading from iCloud...</Text>
           </View>
+        ) : currentPreviewUri ? (
+          <GestureDetector gesture={composedGesture}>
+            <Animated.View
+              style={[styles.previewWrapper, animatedPreviewStyle]}
+              onLayout={handlePreviewLayout}
+            >
+              <Image
+                source={{ uri: currentPreviewUri }}
+                style={[
+                  styles.previewImage,
+                  imageTransform.length > 0 ? { transform: imageTransform } : undefined,
+                ]}
+                resizeMode="cover"
+              />
+              {cropMode && (
+                <CropOverlay onCropChange={handleCropChange} />
+              )}
+            </Animated.View>
+          </GestureDetector>
         ) : (
           <View style={styles.previewPlaceholder}>
             <ActivityIndicator color={colors.accent} size="large" />
@@ -244,74 +406,55 @@ export default function EditorScreen() {
         )}
       </View>
 
-      {/* Filmstrip */}
-      <View style={styles.filmStripContainer}>
-        <FilmStrip
-          frames={frames}
-          loading={framesLoading}
-          progress={progress}
-          currentTimestamp={currentTimestamp}
-          durationMs={durationMs}
-          onTimestampChange={handleTimestampChange}
-          interactive={activeTab !== 'crop'}
-        />
-      </View>
+      {!downloadingVideo && (
+        <>
+          {/* Filmstrip */}
+          <View style={styles.filmStripContainer}>
+            <FilmStrip
+              frames={frames}
+              loading={framesLoading}
+              progress={progress}
+              currentTimestamp={currentTimestamp}
+              durationMs={durationMs}
+              onTimestampChange={handleTimestampChange}
+              interactive={!cropMode}
+            />
+          </View>
 
-      {/* Tab buttons */}
-      <View style={styles.tabBar}>
-        {(['filters', 'adjust', 'crop'] as EditorTab[]).map((tab) => (
-          <Pressable
-            key={tab}
-            onPress={() => setActiveTab(tab)}
-            style={[styles.tab, activeTab === tab && styles.tabActive]}
-          >
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {/* Controls area */}
-      <View style={styles.controlsArea}>
-        {activeTab === 'filters' && (
-          <FilterBar
-            videoUri={videoUri}
-            currentTimestamp={currentTimestamp}
-            selectedFilterId={selectedFilter.id}
-            onSelectFilter={selectFilter}
-          />
-        )}
-        {activeTab === 'adjust' && (
-          <AdjustmentPanel
-            adjustments={adjustments}
-            onAdjustmentChange={setAdjustment}
-          />
-        )}
-        {activeTab === 'crop' && (
-          <View style={styles.cropControls}>
-            <Pressable onPress={handleFlip} style={styles.cropButton}>
-              <Text style={styles.cropButtonText}>↔ Flip</Text>
+          {/* Toolbar */}
+          <View style={styles.toolbar}>
+            <Pressable
+              onPress={toggleCropMode}
+              style={[styles.toolButton, cropMode && styles.toolButtonActive]}
+            >
+              <Ionicons
+                name="crop-outline"
+                size={24}
+                color={cropMode ? colors.background : colors.textPrimary}
+              />
             </Pressable>
-            <Pressable onPress={handleRotate} style={styles.cropButton}>
-              <Text style={styles.cropButtonText}>↻ Rotate</Text>
+            <Pressable onPress={handleFlip} style={styles.toolButton}>
+              <Ionicons name="swap-horizontal-outline" size={24} color={colors.textPrimary} />
+            </Pressable>
+            <Pressable onPress={handleRotate} style={styles.toolButton}>
+              <Ionicons name="refresh-outline" size={24} color={colors.textPrimary} />
             </Pressable>
           </View>
-        )}
-      </View>
 
-      {/* Save button */}
-      <Pressable
-        onPress={handleSave}
-        disabled={saving || frames.length === 0}
-        style={[styles.saveButton, (saving || frames.length === 0) && styles.saveButtonDisabled]}
-      >
-        {saving ? (
-          <ActivityIndicator color={colors.background} />
-        ) : (
-          <Text style={styles.saveButtonText}>Save to Photos</Text>
-        )}
-      </Pressable>
+          {/* Save button */}
+          <Pressable
+            onPress={handleSave}
+            disabled={saving || frames.length === 0}
+            style={[styles.saveButton, (saving || frames.length === 0) && styles.saveButtonDisabled]}
+          >
+            {saving ? (
+              <ActivityIndicator color={colors.background} />
+            ) : (
+              <Text style={styles.saveButtonText}>Save to Photos</Text>
+            )}
+          </Pressable>
+        </>
+      )}
     </View>
   );
 }
@@ -342,6 +485,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.background,
+    overflow: 'hidden',
+  },
+  previewContainerCrop: {
+    padding: spacing.xl,
   },
   previewWrapper: {
     width: '100%',
@@ -357,50 +504,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   filmStripContainer: {
-    paddingHorizontal: spacing.md,
   },
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.sm,
-    gap: spacing.md,
-  },
-  tab: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-  },
-  tabActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: colors.accent,
-  },
-  tabText: {
-    color: colors.textSecondary,
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  tabTextActive: {
-    color: colors.textPrimary,
-  },
-  controlsArea: {
-    minHeight: 100,
-    paddingVertical: spacing.sm,
-  },
-  cropControls: {
+  toolbar: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: spacing.lg,
     paddingVertical: spacing.md,
   },
-  cropButton: {
+  toolButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.surface,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.lg,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  cropButtonText: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '600',
+  toolButtonActive: {
+    backgroundColor: colors.accent,
   },
   saveButton: {
     marginHorizontal: spacing.md,
@@ -418,5 +538,10 @@ const styles = StyleSheet.create({
     color: colors.background,
     fontSize: 17,
     fontWeight: '700',
+  },
+  downloadingText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    marginTop: spacing.md,
   },
 });

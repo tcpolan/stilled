@@ -1,5 +1,5 @@
 {
-  "name": "still",
+  "name": "stilled",
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
@@ -10,6 +10,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
     "expo-constants": "~18.0.13",
